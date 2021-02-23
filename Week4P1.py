@@ -174,3 +174,31 @@ flight_matches = re.findall(regex, flight)
 print("Airline: {} Flight number: {}".format(flight_matches[0][0], flight_matches[0][1]))
 print("Departure: {} Destination: {}".format(flight_matches[0][2], flight_matches[0][3]))
 print("Date: {}".format(flight_matches[0][4]))
+
+#PART EIGHTEEN
+# Write regex and scan contract to capture the dates described
+regex_dates = r"Signed\son\s(\d{2})/(\d{2})/(\d{4})"
+dates = re.search(regex_dates, contract)
+
+# Assign to each key the corresponding match
+signature = {
+	"day": dates.group(2),
+	"month": dates.group(1),
+	"year": dates.group(3)
+}
+# Complete the format method to print-out
+print("Our first contract is dated back to {data[year]}. Particularly, the day {data[day]} of the month {data[month]}.".format(data=signature))
+
+#PART NINETEEN
+for string in html_tags:
+    # Complete the regex and find if it matches a closed HTML tags
+    match_tag = re.match(r"<(\w+)>.*?</\1>", string)
+
+    if match_tag:
+        # If it matches print the first group capture
+        print("Your tag {} is closed".format(match_tag.group(1)))
+    else:
+        # If it doesn't match capture only the tag
+        notmatch_tag = re.match(r"<(\w+)>", string)
+        # Print the first group capture
+        print("Close your {} tag!".format(notmatch_tag.group(1)))
