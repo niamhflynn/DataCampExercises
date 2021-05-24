@@ -4,7 +4,6 @@
 import pandas as pd
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler
-from sklearn import tree
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -16,7 +15,8 @@ from sklearn.model_selection import train_test_split, cross_val_score, GridSearc
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 from sklearn.neighbors import KNeighborsClassifier
-
+from sklearn.inspection import plot_partial_dependence
+SEED = 13
 
 #######################
 # READ DATA
@@ -65,6 +65,7 @@ def get_dataset_info(df):
 
 
 churn_info = get_dataset_info(churn_data)
+print(churn_data.columns)
 print(churn_info['info'])
 
 # From above info, we can see missing information in Total Charges col - we will remove this.
@@ -130,13 +131,15 @@ def demographics_vs_churn(df, target_col, demographic_col):
 # dependents_vs_churn = demographics_vs_churn(churn_data, "Churn", "Dependents")
 churn_data['SeniorCitizen'] = churn_data['SeniorCitizen'].map(
     {0: 'No', 1: 'Yes'})
+
+
 # srcitizen_vs_churn = demographics_vs_churn(churn_data, "Churn", "SeniorCitizen")
 # monthly_churn = sns.countplot(x="tenure", data=churn_data, hue="Churn")
 # Demographics
 
 # PLOT AVERAGE MONTHLY CHARGES VS TENURE FOR 2 CATEGORIES - CHURN AND NOT CHURN
 # Draw a nested barplot by species and sex
-#monthly_charges_vs_tenure = sns.relplot(x="tenure", y="MonthlyCharges", hue="Churn",
+# monthly_charges_vs_tenure = sns.relplot(x="tenure", y="MonthlyCharges", hue="Churn",
 #                                        kind="line", data=churn_data)
 
 
@@ -201,32 +204,90 @@ churn_data['gender_label'] = gender_encoder.fit_transform(churn_data['gender'])
 churn_features = churn_data.drop(['customerID', 'gender'], axis='columns')
 churn_features = pd.get_dummies(data=churn_features, columns=['InternetService', 'Contract', 'PaymentMethod'])
 print(churn_features[churn_features.columns[1:]].corr()['Churn'][:].sort_values(ascending=False))
-churn_features = churn_features.drop(['Churn'], axis='columns')
+# DROP TOTAL CHARGES AS IT IS A PRODUCT OF MONTHLY CHARGES AND TENURE
+churn_features = churn_features.drop(['Churn', 'TotalCharges'], axis='columns')
 
 #######################
 # NORMALISE
 #######################
-features_scaler = MinMaxScaler()
-features = features_scaler.fit_transform(churn_features)
+def normalise_smote_test_split(df, test_size):
+    """
+    This function scales the data using MinMaxScaler(), SMOTE is used to create balanced data and the data is separated
+     into training and test splits - this function is tailored to Churn dataset with target "Churn"
+    :df (Pandas DataFrame): dataframe to be scaled and split
+    :test_size (decimal): Proportion of values to be allocated to test data
+    """
+    features_scaler = MinMaxScaler()
+    features = features_scaler.fit_transform(df)
+    x = pd.DataFrame(features, columns=churn_features.columns)
+    feature_labels = x.columns.values
+    print("THESE ARE THE CHURNFEATURES.columns as columns")
+    print(feature_labels)
+    y = churn_data_original.Churn
+    #######################
+    # SMOTE
+    #######################
+    smote = SMOTE(sampling_strategy='minority')
+    x_smote, y_smote = smote.fit_resample(x, y)
 
-x = features
-y = churn_data_original.Churn
-#######################
-# SMOTE
-#######################
-smote = SMOTE(sampling_strategy='minority')
-x_smote, y_smote = smote.fit_resample(x, y)
-print(y_smote.value_counts())
-
-#######################
-# MACHINE LEARNING
-#######################
-# split the data to training and test data
-# Set SEED for reproducibility
-SEED = 13
-X_train, X_test, y_train, y_test = train_test_split(x_smote, y_smote, test_size=0.3, random_state=13)
+    #######################
+    # MACHINE LEARNING
+    #######################
+    # split the data to training and test data
+    # Set SEED for reproducibility
+    SEED = 13
+    X_train, X_test, y_train, y_test = train_test_split(x_smote, y_smote, test_size=test_size, random_state=SEED)
+    return X_train, X_test, y_train, y_test
 
 
+######################
+# Feature Importance
+######################
+# Initial Model created to determine important features (remove unimportant features to reduce noise)
+X_train, X_test, y_train, y_test = normalise_smote_test_split(churn_features, 0.3)
+
+def create_feature_importance_plot(model, df):
+    """
+    This function creates a feature importance plot from a predictive model and returns feature importance pandas
+    series
+    :model: The predictive model used for the analysis
+    :df: The original dataframe that the model was created
+    from - will be used to get column names for each variable
+    """
+    # plot feature importance
+    important_features = pd.Series(data=model.feature_importances_, index=df.columns.values)
+    important_features = important_features.sort_values(ascending=False)
+    important_features.plot.barh(x='data', y=important_features.index)
+    plt.title('Feature Importance')
+    plt.ylabel('Feature')
+    plt.xlabel('Importance')
+    plt.show()
+    return important_features
+
+SEED=13
+feature_importance_rf = RandomForestClassifier(random_state=SEED)
+feature_importance_rf.fit(X_train, y_train)
+create_feature_importance_plot(feature_importance_rf, churn_features)
+all_feat_pred = feature_importance_rf.predict(X_test)
+print('Accuracy Score All features: ' + str(accuracy_score(y_test, all_feat_pred)))
+# Keep only the columns with over 80 importance
+fi = pd.DataFrame({'cols': churn_features.columns.values, 'feature-importances':
+    feature_importance_rf.feature_importances_})
+print("Printing fi")
+df_keep = pd.DataFrame(fi['feature-importances'] > 0.025)
+
+for i in range(len(df_keep)):
+    if not df_keep['feature-importances'][i]:
+        churn_features = churn_features.drop(fi['cols'][i], axis='columns')
+
+#X_train, X_test, y_train, y_test = normalise_smote_test_split(churn_features, 0.3)
+#removed_features_rf = RandomForestClassifier(random_state=SEED)
+#removed_features_rf.fit(X_train, y_train)
+#removed_features_pred = removed_features_rf.predict(X_test)
+#print('Accuracy Score removed features: ' + str(accuracy_score(y_test, removed_features_pred)))
+#print('Improvement: ' + str(accuracy_score(y_test, removed_features_pred) - accuracy_score(y_test, all_feat_pred)))
+
+# FOUND THAT REMOVING VARIABLES DID NOT LEAD TO IMPROVEMENT, WILL KEEP ALL VARIABLES FOR ANALYSIS.
 #######################
 # LOGISTIC REGRESSION
 ########################
@@ -348,8 +409,8 @@ print('Precision Score : ' + str(precision_score(y_test, dt_pred)))
 print('Recall Score : ' + str(recall_score(y_test, dt_pred)))
 print('F1 Score : ' + str(f1_score(y_test, dt_pred)))
 
-#fig = plt.figure(figsize=(25, 20))
-#_ = tree.plot_tree(dt_final,
+# fig = plt.figure(figsize=(25, 20))
+# _ = tree.plot_tree(dt_final,
 #                   filled=True)
 # plt.savefig('foo.png')
 
@@ -380,6 +441,10 @@ print('RF Accuracy Score : ' + str(accuracy_score(y_test, rf_pred)))
 print('RF Precision Score : ' + str(precision_score(y_test, rf_pred)))
 print('RF Recall Score : ' + str(recall_score(y_test, rf_pred)))
 print('RF F1 Score : ' + str(f1_score(y_test, rf_pred)))
+# plot feature importance for random forest model
+# rf_feature_importance = create_feature_importance_plot(rf_tuned, churn_features)
+
+#disp1 = plot_partial_dependence(rf_tuned, x_smote, [3, 13])
 
 #######################
 # XGBoost
@@ -396,12 +461,12 @@ xgb = XGBClassifier(random_state=13,
                     gamma=5)
 xgb.fit(X_train, y_train)
 xgb_pred = xgb.predict(X_test)
-
 print('XGB Accuracy Score : ' + str(accuracy_score(y_test, xgb_pred)))
 print('XGB Precision Score : ' + str(precision_score(y_test, xgb_pred)))
 print('XGB Recall Score : ' + str(recall_score(y_test, xgb_pred)))
 print('XGB F1 Score : ' + str(f1_score(y_test, xgb_pred)))
 
+# xgb_feature_importance = create_feature_importance_plot(xgb, churn_features)
 #######################
 # KNN
 ########################
@@ -423,12 +488,12 @@ for i, k in enumerate(neighbors):
     test_recall[i] = recall_score(y_test, knn_test_pred)
 
 # Generate plot
-plt.title('k-NN: Varying Number of Neighbors')
-plt.plot(neighbors, test_recall, label='Testing Recall')
-plt.legend()
-plt.xlabel('Number of Neighbors')
-plt.ylabel('Recall')
-plt.show()
+# plt.title('k-NN: Varying Number of Neighbors')
+# plt.plot(neighbors, test_recall, label='Testing Recall')
+# plt.legend()
+# plt.xlabel('Number of Neighbors')
+# plt.ylabel('Recall')
+# plt.show()
 
 knn = KNeighborsClassifier(n_neighbors=3)
 
@@ -441,7 +506,14 @@ print('KNN Precision Score : ' + str(precision_score(y_test, knn_pred)))
 print('KNN Recall Score : ' + str(recall_score(y_test, knn_pred)))
 print('KNN F1 Score : ' + str(f1_score(y_test, knn_pred)))
 y_prob = knn.predict_proba(X_test)[:, 1]
-
 create_confusion_matrix(y_test, xgb_pred)
 
 
+########################
+# RESTAURANT DATA
+########################
+# As the churn dataset had few missing values and few duplicates, I will be using the restaurants data from
+# kaggle to clean data, display knowledge of regex and merge dataframes
+restaurant_1 = import_data("Future50.csv")
+restaurant_2 = import_data("Top250.csv")
+restaurant_3 = import_data("Independence100.csv")
